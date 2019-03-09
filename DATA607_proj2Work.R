@@ -15,21 +15,18 @@ colnames(mvp.data) <- c('superbowlID', 'player', 'stats')
 mvp.data
 
 # parse column 2
-mvp.data %<>% separate(player,c('name', 'position','team'),sep=",") 
+mvp.data %<>% separate(player,c('name', 'position','team'),sep=",")
 
 #trim artefacts from separate()
-# mvp.data$team <- str_trim(mvp.data$team, side="both")
-# mvp.data$position <- str_trim(mvp.data$position, side="both")
+mvp.data$team <- str_trim(mvp.data$team, side="both")
+mvp.data$position <- str_trim(mvp.data$position, side="both")
 
 # standardize words - 
 mvp.data$stats %<>% str_replace_all('touchdown[s]?', 'TD') %>% 
   str_replace_all('[Tt]wo', '2')
 
-### try to parse stats
-# mvp.data %<>% separate(stats, into=c('stat.1','stat.2','stat.3'),sep=',')
-# mvp.data$`stat.1` <- str_trim(mvp.data$`1`, side="both")
-# mvp.data$`stat.2` <- str_trim(mvp.data$`2`, side="both")
-# mvp.data$`stat.3` <- str_trim(mvp.data$`3`, side="both")
+
+
 mvp.data$TD <- NA
 mvp.data$yards<-NA
 
@@ -37,24 +34,33 @@ mvp.data$yards<-NA
 # this works but neecs to be generalized
 for(i in 1:53){
 
-    mvp.data$TD[i] <- str_extract(mvp.data$stats[i], '[[:digit:]] TD') %>%  str_replace('TD','')
-    mvp.data$yards[i] <- str_extract(mvp.data$stats[i], '[[:digit:]]{2,3} yards') %>%  str_replace('yards','')
+    mvp.data$TD[i] <- str_extract(mvp.data$stats[i], '[[:digit:]] TD') %>%  str_replace('TD','') %>% as.integer()
+    mvp.data$yards[i] <- str_extract(mvp.data$stats[i], '[[:digit:]]{2,3} yards') %>%  str_replace('yards','') %>% str_trim(side = 'both')
 }
-mvp.data
-
+str(mvp.data)
+mvp.data <- mvp.data %>% select(-stats)
+mvp.data$yards <- as.integer(mvp.data$yards)
+mvp.data$TD <- as.integer(mvp.data$TD)
 # Data Analysis finding the players with the most MVP's, player with most 
 #total touchdown and passing or rushing yardage, as well as a summary of 
 #frequencies of which positions win the award most.
 
+#players with more than one MVP
 most.mvps <- mvp.data %>%  count(name) %>% arrange(desc(n)) %>% filter(n>1)
 most.mvps
 
+# players with the most passing yardage
+top.QB.yards <- mvp.data %>% filter(position=='QB') %>% arrange(desc(yards)) %>% top_n(10)
 
 
+# most yards for a non-QB
+mvp.data %>% filter(position!='QB') %>% arrange(desc(yards)) %>% top_n(10)
+
+# barpolot of position frequencies
+mvp.data %>% group_by(position) %>% count() %>%  arrange(desc(n)) %>%  ggplot(aes(x=position,y=n)) + geom_bar(stat='identity')
 
 
-
-##################### TABLE 2 ######################################
+##################### SD REULTS ######################################
 site <- "http://www.espn.com/nfl/superbowl/history/winners"
 SB.results = readHTMLTable(site, header=T, which=1,stringsAsFactors=F) %>% as_tibble()
 colnames(SB.results) <- c('superbowlID','date','site','result')
@@ -79,13 +85,21 @@ unlist(str_match_all(SB.results$winner, '[:alpha:]+'))
 #  Create columns for 
 #Super Bowl ID, MVP name, position, Team, TDs scored/yards passing//yards rushing/sacks or turnovers
 
+
+
 #####################################################################################################
 ##############################TABLE 2################################################################
 #-overall current distribution, trends by state, overall trends
 raw.dat <- read.csv('Project2_tbl2.csv', header=T, stringsAsFactors = F) %>% as_tibble()
-colnames(raw.dat) <- c('State','SizeRank','1','2','3','4','5','6','7','8','9','10','11','12')
+month.level <- c('Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec')
+colnames(raw.dat) <- c('State','SizeRank', month.level)
 raw.dat2 <- raw.dat %>%  gather('MOY', 'n',3:14)
-raw.dat2
+
+str(raw.dat2$MOY)
+raw.dat2$MOY <- factor(raw.dat2$MOY, levels=month.level)
+# top states 
+raw.dat2 %>% group_by(State) %>% summarise(meanPrice=mean(n)) %>%  arrange(desc(meanPrice)) 
+#barplot of top ten plus average
 
 # Look at seasonality effects
 test <- raw.dat2 %>% group_by(MOY) %>%  
