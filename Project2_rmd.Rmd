@@ -1,0 +1,266 @@
+---
+title: "DATA 607 - Project 2"
+author: "Rob Welk"
+date: "March 10, 2019"
+output: 
+  html_document:
+    toc: true 
+    toc_depth: 3 
+    number_sections: true  
+    theme: united  
+    highlight: tango 
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Problem Statement 
+Working with data sets that are messy or in a format not conducive to downstream analysis is a major task that a data scientist must face.  In this project, 3 datasets that qualify as messy are to be tidied primarily using the ubiquidous dplyr and tidyr packages.  Then some analysis is provided as requested. All input .csv tables are available at the GitHub repository https://github.com/robertwelk/DATA607_Project2.git
+
+#Packages Used
+```{r, message=F}
+library(dplyr)
+library(stringr)
+library(magrittr)
+library(tidyr)
+library(ggplot2)
+library(usmap)
+library(mapdata)
+```
+
+# Data set #1 - Super Bowl MVPs
+This data comes from ESPN and has some immediate noticeable issues, mainly columns contain values seperated by commas and one column lacks structure.  Luckily the tools of the tidyverse are well-equiped to tackle these issues, pun intended.
+
+## Tidy
+*Read in data and look at the structure*  
+```{r}
+mvp.data <- read.csv('Project2_tbl1.csv', header=T, stringsAsFactors = F)
+#Examine the structure of the raw data
+str(mvp.data)
+#Rename columns
+colnames(mvp.data) <- c('superbowlID', 'player', 'stats')
+```
+
+*Parsing of 'player' variable*     
+This is found in column 2, and in the raw data contained player name, position, and team.  Tidy data should not have 3 variables in the same column, and commas are a poor option to parse data within a column. The 'separate()' function was designed to solve a problem like this. Note that the pipe operater can be used for assignment (%<>%) thanks to the magrittr package.
+```{r}
+# parse column 2
+mvp.data %<>% separate(player,c('name', 'position','team'),sep=",")
+#trim
+mvp.data$team <- str_trim(mvp.data$team, side="both")
+mvp.data$position <- str_trim(mvp.data$position, side="both")
+```
+
+*Parse & restructure 'stats' variable*  
+This task is more complicated than the previous step. Not only does the column need to be parsed, but the ordering of stats is inconsistent and not every player has the same set of stats since they play different positions.  Here we are primarily concerned with yards from scrimmage and touchdowns scored, for the downstream analysis. Regular expressions are used in conjunction with a 'for loop' to get place stats in respective columns.
+
+```{r}
+# standardize vocabulary -  
+mvp.data$stats %<>% str_replace_all('touchdown[s]?', 'TD') %>% 
+  str_replace_all('[Tt]wo', '2')
+
+# create variables within the df to store stats of interest
+mvp.data$TD <- NA
+mvp.data$yards<-NA
+
+# Set up the loop - for each player the number of touchdowns scored and yards from scrimmage will be assigned to the designated column and stored as an integer
+for(i in 1:nrow(mvp.data)){
+
+    mvp.data$TD[i] <- str_extract(mvp.data$stats[i], '[[:digit:]] TD') %>%  
+                      str_replace('TD','') 
+    
+    mvp.data$yards[i] <- str_extract(mvp.data$stats[i], '[[:digit:]]{2,3} yards') %>%  
+                      str_replace('yards','') %>% 
+                      str_trim(side = 'both') 
+}
+
+#remove the stats column
+mvp.data <- mvp.data %>% select(-stats)
+#Coerce to integer data type
+mvp.data$yards <- as.integer(mvp.data$yards)
+#assume that NA values of TDs mean no touchdown was scored
+mvp.data$TD[is.na(mvp.data$TD)] <- 0
+
+head(mvp.data)
+```
+## Analysis 
+*Objectives*  
+a. finding the players with the most MVP's  
+b. Player with most total touchdowns and passing or rushing yardage   
+c. frequencies of which positions win the award most.
+
+**Players with more than one MVP**  
+the results are not what we wanted - *Tom Brady* is the leader.  
+```{r}
+mvp.data %>%  count(name) %>% arrange(desc(n)) %>% filter(n>1)
+
+```
+*Players with the most total touchdowns*   
+More bad news!
+```{r}
+mvp.data %>% group_by(name) %>% 
+            summarise(TotalTD=sum(as.numeric(TD))) %>% 
+            arrange(desc(TotalTD))
+```
+*Players with the most passing yardage* - no surprises
+```{r}
+# single game
+mvp.data %>% filter(position=='QB') %>% 
+              arrange(desc(yards)) %>% 
+              top_n(10)
+
+#combined
+mvp.data %>% filter(position=='QB') %>% 
+          group_by(name) %>% 
+          summarise(Total_yards=sum(yards,na.rm=T)) %>% 
+          arrange(desc(Total_yards)) %>% 
+          top_n(10)
+```
+
+Most yards in a single game for a non-QB was achieved by Desmond Howard, an unlikely source.  Although a Heisman Trophy winner, Howard was a kick return specialist and used sparingly as wide receiver for QB Brett Favre.  
+```{r}
+mvp.data %>% filter(position!='QB') %>%
+              arrange(desc(yards)) %>% 
+              top_n(10)
+```
+
+*Barpolot of position frequencies*  
+- as expected QBs dominate MVP awards
+```{r}
+mvp.data %>% group_by(position) %>% 
+              count() %>%  
+              arrange(desc(n)) %>%  
+              ggplot(aes(x=position,y=n)) + 
+                    geom_bar(stat='identity') + 
+                    labs(title = "Super Bowl MVP Awards by Position", x="Position", y="Number")
+```
+
+---------------------------------------------------------------------------------------
+
+# Data set #2 - Zillow 2018 rental prices 
+This data set comes from Zillow and provides monthly summaries of rental prices per square foot for each state in the US in the year 2018.  It is untidy in the fact that the data appears in 'wide' format, that is, a single variable (price per square foot) is contained in multiple columns, which is not ideal for most analytical techniques. 
+
+## Tidy
+*Read in data as a csv*  
+```{R}
+rental.price <- read.csv('Project2_tbl2.csv', header=T, stringsAsFactors = F) %>% as_tibble()
+```
+
+The data is tidied by providing descriptive column names and using the 'gather()' function to put into long form. The result is that for each state and each month, price per square foot is provided in a single column instead of 12 (one for each month). Now the data is tidy - each variable is in its own column.
+```{r}
+month.level <- c('Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec')
+colnames(rental.price) <- c('region','SizeRank', month.level)
+rental.price %<>%  gather('MOY', 'price',3:14)
+rental.price
+```
+## Analysis
+*Objectives*   
+- include trends by state and seasonal trends
+```{r}
+#set up MOY as a factor 
+rental.price$MOY <- factor(rental.price$MOY, levels=month.level)
+```
+*Most expensive states to rent*  
+If we look at the most expensive states to rent properties, we see New York at the top of the list.  These numbers are the mean price for year 2018.
+```{r}
+rental.price %>%  group_by(region) %>% 
+              summarise(meanPrice=mean(price)) %>%  
+              arrange(desc(meanPrice)) 
+```
+*Map*  
+Map data is provided in the 'usmap' package and can be used in conjunction with ggplot. The resulting cloropleth map provides an overview of mean price per square foot of rental units for every state in the US.  
+```{r}
+# prepare to join state map data to zillow df
+rental.price$region <- str_to_lower(rental.price$region)
+# join data from map_data package with the zillow data
+state.plot <- map_data("state") %>% left_join(rental.price,by="region")
+
+ggplot() + 
+    geom_polygon(data=state.plot, aes(x=long, y=lat, group = group,  fill=price),colour="white") + 
+    scale_fill_continuous(low = "lightblue", high = "darkblue", guide="colorbar")  + 
+    theme_bw()  +
+    labs(fill = "Price/sqft" ,title = "Average State Rental Price per sqft - 2018", x="", y="")
+```
+
+*Seasonality*   
+As was hypothesized on the message board, there appears to be seasonal effects in the price of rentals. Prices rise in the beginning of spring and then fall as the summer progresses. This may be influenced by parents of children attending schools for the upcoming year.  
+```{r}
+rental.price %>%  group_by(MOY) %>%  
+                  summarize(price.month=mean(price)) %>% 
+                  arrange(as.numeric(MOY)) %>% 
+                  ggplot(aes(x=MOY,y=price.month)) + 
+                          geom_path(stat='identity', group=1) +
+                          labs(title = "Price per sqft vs Month", x="Month of Year (2018)", y="Price per square foot")
+
+```
+
+
+It would be interesting to get more years data and see if the same trend is consistent over time. 
+
+# Data set # 3 - Unemployment Rates 
+Unemployment data in US counties from years 2007-2017. 
+
+## Tidy
+Load data as a csv and look at the structure
+```{r}
+unemp.tbl <- read.csv('Project2_tbl3.csv', header=T, stringsAsFactors = F) %>% as_tibble
+#str(unemp.tbl)
+```
+From the imported raw data, the subset of columns that provide yearly unemployment rates are selected, as well as county ID #(FIPS) and Area_name (country name and state)
+```{r, message=FALSE}
+# select statement
+unemp.tbl <- unemp.tbl %>%  select(FIPStxt, Area_name,Unemployment_rate_2007,Unemployment_rate_2008,Unemployment_rate_2009,Unemployment_rate_2010,Unemployment_rate_2011,Unemployment_rate_2012,Unemployment_rate_2013, Unemployment_rate_2014,Unemployment_rate_2015,Unemployment_rate_2016,Unemployment_rate_2017)
+
+#rename variables
+colnames(unemp.tbl) <-c('fips','Area','y2007','y2008','y2009','y2010','y2011','y2012','y2013','y2014','y2015','y2016','y2017')
+
+#parse area_name into county name and state name - just county data, remove national and state averages
+unemp.tbl %<>%  separate(Area, c('county_name', 'state_name'), sep=',') %>% 
+                filter(!is.na(state_name)) 
+
+```
+
+Data is still in wide format, but this is useful for calculated values. For example the 11-year change in unemployment for a county can be computed and stored in the dataframe before converting to long format.
+```{r}
+#find 10 year percent decrease (negative value means unemployment went up)
+unemp.tbl %<>% mutate(percent_decrease = ((y2007-y2017)/y2007)*100)
+unemp.tbl
+```
+
+```{r}
+#put unemployment rates in 'long' form
+unemp.tbl %<>% gather("year",'unemployment_rate', y2007:y2017)
+unemp.tbl
+```
+
+## Analysis
+Group by county and retrieve mean values
+
+```{r}
+unemp.tbl %>% group_by(county_name, state_name) %>% 
+              summarize(ten_year_mean = mean(unemployment_rate)) %>% 
+              arrange(desc(ten_year_mean)) 
+
+```
+In which states has unemployment gotten worse in the last 10 years?
+```{r}
+unemp.tbl %>% group_by(state_name) %>% summarise(mean_decrease=mean(percent_decrease,na.rm = T  )) %>% arrange(mean_decrease)
+```
+Map of New York State counties 
+```{r}
+#prepare the join - need to have fips ID be a 5 digit number with leading zero if needed
+unemp.tbl$fips <- as.character(unemp.tbl$fips) %>% str_pad(5,pad='0') 
+
+
+# join data from map_data package with unemployment df
+county.plot <- us_map("counties") %>% left_join(unemp.tbl,by="fips") %>% filter(abbr=='NY')
+
+ggplot() + 
+    geom_polygon(data=county.plot, aes(x=long, y=lat, group = group, fill=percent_decrease),colour="white",linetype=1) + 
+    scale_fill_continuous(low = "lightblue", high = "darkblue", guide="colorbar")  + 
+    theme_bw()  +
+    labs(fill = "Change in Unemployemnt Rate" ,title = "Change in Unemployment Rate in US counties from 2007 to 2017", x="", y="")
+```
+
